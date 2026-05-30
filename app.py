@@ -4,38 +4,38 @@ import yfinance as yf
 import numpy as np
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Multi-Indicator Backtester", layout="wide")
-st.title("🚀 Multi-Indicator (Supertrend + RSI + 200 EMA) Intraday Backtester")
-st.write("3 पावरफुल इंडिकेटर्स का कॉम्बिनेशन - 100% एरर-फ्री और सेफ")
+st.set_page_config(page_title="Bi-Directional Backtester", layout="wide")
+st.title("🏹 Both-Side (BUY & SHORT) Intraday Backtester")
+st.write("मार्केट ऊपर जाए या नीचे, दोनों तरफ से प्रॉफिट कमाने वाली एडवांस रणनीति")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🔧 Indicator Settings")
-ticker = st.sidebar.text_input("Stock Ticker", value="SBIN.NS")
+ticker = st.sidebar.text_input("Stock Ticker", value="TATAMOTORS.NS") # डिफ़ॉल्ट हाई-मोमेंटम स्टॉक
 period = st.sidebar.selectbox("Data Period", options=["1mo", "3mo"], index=0)
 
-# Indicator Parameters
+# Optimized Settings for 15-Min
 st_length = st.sidebar.number_input("Supertrend Length (ATR)", min_value=5, value=10)
-st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=3.0, step=0.1)
+st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=2.0, step=0.1) # 2.0 किया फॉर फास्ट एंट्री
 rsi_period = st.sidebar.number_input("RSI Period", min_value=5, value=14)
-ema_period = st.sidebar.number_input("Long EMA Period", min_value=50, value=200)
+ema_period = st.sidebar.number_input("Long EMA Period", min_value=20, value=50) # 50 किया ताकि ट्रेंड जल्दी पकड़े
 
 cash = st.sidebar.number_input("Starting Capital (INR)", value=100000)
 
-# --- PURE PANDAS CALCULATIONS (No external library) ---
-def calculate_indicators(df, st_len=10, st_mult=3.0, rsi_len=14, ema_len=200):
+# --- PURE PANDAS CALCULATIONS ---
+def calculate_indicators(df, st_len=10, st_mult=2.0, rsi_len=14, ema_len=50):
     df = df.copy()
     
-    # 1. 200 EMA Calculation
+    # 1. EMA
     df['EMA_Long'] = df['Close'].ewm(span=ema_len, adjust=False).mean()
     
-    # 2. RSI Calculation
+    # 2. RSI
     delta = df['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=rsi_len).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_len).mean()
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # 3. Supertrend Calculation
+    # 3. Supertrend
     df['H-L'] = df['High'] - df['Low']
     df['H-PC'] = (df['High'] - df['Close'].shift(1)).abs()
     df['L-PC'] = (df['Low'] - df['Close'].shift(1)).abs()
@@ -75,77 +75,87 @@ try:
     data = yf.download(tickers=ticker, period=period, interval="15m")
     
     if data.empty:
-        st.error("डेटा नहीं मिला! सही टिकर डालें।")
+        st.error("डेटा नहीं मिला!")
     else:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
-        st.success("डेटा लोड हो गया! एडवांस इंडिकेटर्स कैलकुलेट हो रहे हैं...")
+        st.success("डेटा लोड हो गया! दोनों तरफ के सिग्नल्स प्रोसेस हो रहे हैं...")
         
-        # Calculate All Indicators
         df_result = calculate_indicators(data, st_length, st_multiplier, rsi_period, ema_period)
         
-        # --- ADVANCED STRATEGY LOGIC ---
+        # --- ADVANCED DOUBLE-SIDED TRADING LOGIC ---
         trades = []
-        in_position = False
-        buy_price = 0
+        position_type = None # "BUY", "SHORT", or None
+        entry_price = 0
+        entry_time = None
         
         for i in range(1, len(df_result)):
             row = df_result.iloc[i]
             prev_row = df_result.iloc[i-1]
             index = df_result.index[i]
             
-            # BUY CONDITION: 
-            # 1. Supertrend turned Green (Direction shifted from -1 to 1)
-            # 2. Close Price is ABOVE 200 EMA (Trend is Bullish)
-            # 3. RSI is ABOVE 50 (Strong momentum)
-            if prev_row['Direction'] == -1 and row['Direction'] == 1:
-                if row['Close'] > row['EMA_Long'] and row['RSI'] > 50:
-                    if not in_position:
-                        buy_price = row['Close']
-                        in_position = True
-                        trades.append({'Type': 'BUY', 'Price': buy_price, 'Time': index})
-                        
-            # EXIT CONDITION: Supertrend turns Red OR Price drops below 200 EMA
-            elif row['Direction'] == -1 or row['Close'] < row['EMA_Long']:
-                if in_position:
-                    sell_price = row['Close']
-                    pnl = ((sell_price - buy_price) / buy_price) * 100
-                    in_position = False
-                    trades.append({'Type': 'SELL', 'Price': sell_price, 'Time': index, 'PnL%': pnl})
+            # --- 1. EXIT CONDITIONS ---
+            if position_type == "BUY":
+                # Exit Long if Supertrend turns Red OR Price goes below EMA
+                if row['Direction'] == -1 or row['Close'] < row['EMA_Long']:
+                    pnl = ((row['Close'] - entry_price) / entry_price) * 100
+                    trades.append({'Trade Type': 'BUY (Long)', 'Entry Time': entry_time, 'Exit Time': index, 'Entry Price': entry_price, 'Exit Price': row['Close'], 'PnL%': pnl})
+                    position_type = None
+                    
+            elif position_type == "SHORT":
+                # Exit Short if Supertrend turns Green OR Price goes above EMA
+                if row['Direction'] == 1 or row['Close'] > row['EMA_Long']:
+                    pnl = ((entry_price - row['Close']) / entry_price) * 100 # Short में गिरने पर फायदा होता है
+                    trades.append({'Trade Type': 'SHORT (Sell)', 'Entry Time': entry_time, 'Exit Time': index, 'Entry Price': entry_price, 'Exit Price': row['Close'], 'PnL%': pnl})
+                    position_type = None
 
-        # --- DISPLAY PERFORMANCE ---
-        st.subheader("📊 Multi-Indicator Strategy Report")
+            # --- 2. ENTRY CONDITIONS (जब हाथ खाली हो) ---
+            if position_type is None:
+                # BUY Entry
+                if prev_row['Direction'] == -1 and row['Direction'] == 1:
+                    if row['Close'] > row['EMA_Long'] and row['RSI'] > 50:
+                        position_type = "BUY"
+                        entry_price = row['Close']
+                        entry_time = index
+                        
+                # SHORT Entry
+                elif prev_row['Direction'] == 1 and row['Direction'] == -1:
+                    if row['Close'] < row['EMA_Long'] and row['RSI'] < 50:
+                        position_type = "SHORT"
+                        entry_price = row['Close']
+                        entry_time = index
+
+        # --- DISPLAY RESULTS ---
+        st.subheader("📊 Both-Side Performance Report")
         col1, col2 = st.columns(2)
         
-        if len(trades) > 1:
-            trades_df = pd.DataFrame([t for t in trades if t['Type'] == 'SELL'])
+        if len(trades) > 0:
+            trades_df = pd.DataFrame(trades)
             
             total_trades = len(trades_df)
             win_trades = len(trades_df[trades_df['PnL%'] > 0])
-            win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
+            win_rate = (win_trades / total_trades) * 100
             total_return = trades_df['PnL%'].sum()
             final_equity = cash * (1 + (total_return/100))
             
             with col1:
-                st.metric(label="Total Return (%)", value=f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
-                st.metric(label="Final Estimated Capital", value=f"₹{final_equity:,.2f}")
+                st.metric(label="Total Combined Return (%)", value=f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
+                st.metric(label="Final Capital", value=f"₹{final_equity:,.2f}")
                 
             with col2:
-                st.metric(label="Total Closed Trades", value=total_trades)
-                st.metric(label="Win Rate (%)", value=f"{win_rate:.2f}%")
+                st.metric(label="Total Executed Trades", value=total_trades)
+                st.metric(label="Strategy Win Rate (%)", value=f"{win_rate:.2f}%")
                 
-            st.write("### 📝 Filtering Trade Log (केवल फ़िल्टर्ड ट्रेड्स)")
-            st.dataframe(trades_df[['Time', 'Price', 'PnL%']])
+            # Full Log Table
+            st.write("### 📝 Master Trade Log (Buy & Short दोनों की लिस्ट)")
+            st.dataframe(trades_df[['Trade Type', 'Entry Time', 'Exit Time', 'Entry Price', 'Exit Price', 'PnL%']])
         else:
-            st.warning("इन कड़क कंडीशन्स (Supertrend + RSI + EMA) के साथ इस अवधि में कोई ट्रेड मैच नहीं हुआ। कृपया डेटा पीरियड बढ़ाएं या सेटिंग्स को थोड़ा कम करें।")
+            st.warning("इस अवधि में इन पैमानों पर कोई ट्रेड नहीं बना।")
             
         # Charts
-        st.write("### 📉 Price, Supertrend & 200 EMA Chart")
+        st.write("### 📉 Multi-Indicator Price Chart")
         st.line_chart(df_result[['Close', 'Supertrend', 'EMA_Long']])
-        
-        st.write("### ⏱️ RSI (Relative Strength Index)")
-        st.line_chart(df_result['RSI'])
 
 except Exception as e:
     st.error(f"सिस्टम एरर: {e}")
