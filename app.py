@@ -1,99 +1,135 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta  # नए इंडिकेटर्स के लिए
-from backtesting import Backtest, Strategy
-import streamlit.components.v1 as components
+import numpy as np
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Advanced Intraday Backtester", layout="wide")
-st.title("🚀 Supertrend + RSI Intraday Strategy")
-st.write("15-Min टाइमफ्रेम के लिए एक प्रोफेशनल और मजबूत इंट्राडे रणनीति")
+st.set_page_config(page_title="Safe Intraday Backtester", layout="wide")
+st.title("🚀 Custom 15-Min Supertrend Backtester")
+st.write("बिना किसी बाहरी लाइब्रेरी एरर के 100% सुरक्षित और फास्ट बैकटेस्टर")
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("🔧 Strategy Settings")
-ticker = st.sidebar.text_input("Stock Ticker (Yahoo Finance)", value="SBIN.NS")
-interval = st.sidebar.selectbox("Intraday Interval", options=["5m", "15m", "60m"], index=1)
+st.sidebar.header("🔧 Settings")
+ticker = st.sidebar.text_input("Stock Ticker", value="SBIN.NS")
 period = st.sidebar.selectbox("Data Period", options=["1mo", "3mo"], index=0)
 
-# Supertrend Parameters
-st_length = st.sidebar.number_input("Supertrend Length", min_value=5, max_value=20, value=10)
-st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, max_value=5.0, value=3.0, step=0.1)
+# Supertrend Engine (Built-in Pandas)
+st_length = st.sidebar.number_input("Supertrend Length (ATR)", min_value=5, value=10)
+st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=3.0, step=0.1)
 
-# RSI Parameters
-rsi_period = st.sidebar.number_input("RSI Period", min_value=5, max_value=30, value=14)
+cash = st.sidebar.number_input("Starting Capital (INR)", value=100000)
 
-cash = st.sidebar.number_input("Starting Capital", value=100000)
-commission_pct = st.sidebar.number_input("Brokerage & Taxes (%)", value=0.05) / 100
-
-# --- STRATEGY LOGIC ---
-class SupertrendRsiStrategy(Strategy):
-    st_len = 10
-    st_mult = 3.0
-    rsi_len = 14
+# --- PURE PANDAS SUPERTREND FUNCTION ---
+def calculate_supertrend(df, period=10, multiplier=3):
+    df = df.copy()
+    # True Range (TR) Calculation
+    df['H-L'] = df['High'] - df['Low']
+    df['H-PC'] = (df['High'] - df['Close'].shift(1)).abs()
+    df['L-PC'] = (df['Low'] - df['Close'].shift(1)).abs()
+    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
     
-    def init(self):
-        df = self.data.df
+    # Average True Range (ATR)
+    df['ATR'] = df['TR'].rolling(window=period).mean()
+    
+    # Basic Upper & Lower Bands
+    hl2 = (df['High'] + df['Low']) / 2
+    df['Basic_UB'] = hl2 + (multiplier * df['ATR'])
+    df['Basic_LB'] = hl2 - (multiplier * df['ATR'])
+    
+    # Final Bands & Trend Direction
+    df['Final_UB'] = df['Basic_UB']
+    df['Final_LB'] = df['Basic_LB']
+    df['Supertrend'] = 0.0
+    df['Direction'] = 1  # 1 for Buy, -1 for Sell
+    
+    for i in range(1, len(df)):
+        # Upper Band Logic
+        if df['Basic_UB'].iloc[i] < df['Final_UB'].iloc[i-1] or df['Close'].iloc[i-1] > df['Final_UB'].iloc[i-1]:
+            df.loc[df.index[i], 'Final_UB'] = df['Basic_UB'].iloc[i]
+        else:
+            df.loc[df.index[i], 'Final_UB'] = df['Final_UB'].iloc[i-1]
+            
+        # Lower Band Logic
+        if df['Basic_LB'].iloc[i] > df['Final_LB'].iloc[i-1] or df['Close'].iloc[i-1] < df['Final_LB'].iloc[i-1]:
+            df.loc[df.index[i], 'Final_LB'] = df['Basic_LB'].iloc[i]
+        else:
+            df.loc[df.index[i], 'Final_LB'] = df['Final_LB'].iloc[i-1]
+            
+        # Direction Logic
+        if df['Direction'].iloc[i-1] == 1:
+            df.loc[df.index[i], 'Direction'] = 1 if df['Close'].iloc[i] > df['Final_LB'].iloc[i] else -1
+        else:
+            df.loc[df.index[i], 'Direction'] = -1 if df['Close'].iloc[i] < df['Final_UB'].iloc[i] else 1
+            
+        df.loc[df.index[i], 'Supertrend'] = df['Final_LB'].iloc[i] if df['Direction'].iloc[i] == 1 else df['Final_UB'].iloc[i]
         
-        # Pandas_ta का उपयोग करके Supertrend और RSI निकालना
-        st_ind = ta.supertrend(df['High'], df['Low'], df['Close'], length=self.st_len, multiplier=self.st_mult)
-        
-        # Supertrend की Direction लाइन (1 मतलब Buy/Green, -1 मतलब Sell/Red)
-        self.st_dir = self.I(lambda: st_ind[f"SUPERTd_{self.st_len}_{self.st_mult}"])
-        self.rsi = self.I(ta.rsi, df['Close'], length=self.rsi_len)
+    return df
 
-    def next(self):
-        # Current values
-        current_rsi = self.rsi[-1]
-        current_dir = self.st_dir[-1]
-        prev_dir = self.st_dir[-2] if len(self.st_dir) > 1 else current_dir
-
-        # BUY SIGNAL: Supertrend ग्रीन हो जाए (यानी -1 से 1 हो जाए) और RSI 50 के ऊपर हो (मजबूत मोमेंटम)
-        if current_dir == 1 and prev_dir == -1 and current_rsi > 50:
-            if not self.position:
-                self.buy()
-                
-        # SELL SIGNAL: Supertrend रेड हो जाए (1 से -1 हो जाए) या RSI कमजोर हो जाए
-        elif current_dir == -1 and prev_dir == 1:
-            if self.position:
-                self.position.close()
-
-# --- FETCH DATA & RUN ---
-st.subheader(f"📊 Running Backtest for {ticker}...")
+# --- FETCH & PROCESS ---
 try:
-    data = yf.download(tickers=ticker, period=period, interval=interval)
+    data = yf.download(tickers=ticker, period=period, interval="15m")
     
     if data.empty:
-        st.error("डेटा नहीं मिला! कृपया सही सिंबल डालें।")
+        st.error("डेटा नहीं मिला! कृपया सही टिकर डालें (उदा. RELIANCE.NS)")
     else:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
-        st.success(f"सफलतापूर्वक {data.shape[0]} कैंडल्स का डेटा लोड हुआ।")
+        st.success("डेटा सफलतापूर्वक फेच हुआ! प्रोसेसिंग जारी है...")
         
-        # पैरामीटर्स अपडेट करना
-        SupertrendRsiStrategy.st_len = st_length
-        SupertrendRsiStrategy.st_mult = st_multiplier
-        SupertrendRsiStrategy.st_len = rsi_period
+        # Calculate Supertrend
+        df_result = calculate_supertrend(data, st_length, st_multiplier)
         
-        # बैकटेस्ट रन करना
-        bt = Backtest(data, SupertrendRsiStrategy, cash=cash, commission=commission_pct)
-        stats = bt.run()
+        # --- GENERATE TRADES & BACKTEST ---
+        df_result['Signal'] = df_result['Direction'].diff() # Detect crossovers
         
-        # --- DISPLAY RESULTS ---
-        col1, col2 = st.columns([1, 2])
+        trades = []
+        in_position = False
+        buy_price = 0
         
-        with col1:
-            st.write("### 📈 Performance Report")
-            st.dataframe(stats.to_frame(name="Value"))
+        for index, row in df_result.iterrows():
+            if row['Signal'] == 2: # Trend turned Green (BUY)
+                if not in_position:
+                    buy_price = row['Close']
+                    in_position = True
+                    trades.append({'Type': 'BUY', 'Price': buy_price, 'Time': index})
+            elif row['Signal'] == -2: # Trend turned Red (SELL/EXIT)
+                if in_position:
+                    sell_price = row['Close']
+                    pnl = ((sell_price - buy_price) / buy_price) * 100
+                    in_position = False
+                    trades.append({'Type': 'SELL', 'Price': sell_price, 'Time': index, 'PnL%': pnl})
+
+        # --- CALCULATE PERFOMANCE METRICS ---
+        st.subheader("📊 Performance Report")
+        col1, col2 = st.columns(2)
+        
+        if len(trades) > 1:
+            trades_df = pd.DataFrame([t for t in trades if t['Type'] == 'SELL'])
             
-        with col2:
-            st.write("### 📉 Multi-Indicator Chart")
-            bt.plot(filename="temp_chart.html", open_browser=False)
-            with open("temp_chart.html", "r", encoding="utf-8") as f:
-                html_data = f.read()
+            total_trades = len(trades_df)
+            win_trades = len(trades_df[trades_df['PnL%'] > 0])
+            win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
+            total_return = trades_df['PnL%'].sum()
+            final_equity = cash * (1 + (total_return/100))
             
-            components.html(html_data, height=600, scrolling=True)
+            with col1:
+                st.metric(label="Total Return (%)", value=f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
+                st.metric(label="Final Estimated Capital", value=f"₹{final_equity:,.2f}")
+                
+            with col2:
+                st.metric(label="Total Closed Trades", value=total_trades)
+                st.metric(label="Win Rate (%)", value=f"{win_rate:.2f}%")
+                
+            # Show Detailed Trade Log
+            st.write("### 📝 Detailed Trade Log (क्लोज्ड ट्रेड्स लिस्ट)")
+            st.dataframe(trades_df[['Time', 'Price', 'PnL%']])
+        else:
+            st.warning("इस अवधि में कोई कम्प्लीट Buy-and-Sell ट्रेड नहीं मिला। कृपया डेटा पीरियड बढ़ाएं या सेटिंग्स बदलें।")
+            
+        # Line Chart of Stock Close vs Supertrend
+        st.write("### 📉 Stock Price vs Supertrend Line")
+        st.line_chart(df_result[['Close', 'Supertrend']])
 
 except Exception as e:
-    st.error(f"एक एरर आई है: {e}")
+    st.error(f"सिस्टम एरर: {e}")
