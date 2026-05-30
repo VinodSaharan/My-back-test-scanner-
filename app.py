@@ -4,58 +4,63 @@ import yfinance as yf
 import numpy as np
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Safe Intraday Backtester", layout="wide")
-st.title("🚀 Custom 15-Min Supertrend Backtester")
-st.write("बिना किसी बाहरी लाइब्रेरी एरर के 100% सुरक्षित और फास्ट बैकटेस्टर")
+st.set_page_config(page_title="Multi-Indicator Backtester", layout="wide")
+st.title("🚀 Multi-Indicator (Supertrend + RSI + 200 EMA) Intraday Backtester")
+st.write("3 पावरफुल इंडिकेटर्स का कॉम्बिनेशन - 100% एरर-फ्री और सेफ")
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("🔧 Settings")
+st.sidebar.header("🔧 Indicator Settings")
 ticker = st.sidebar.text_input("Stock Ticker", value="SBIN.NS")
 period = st.sidebar.selectbox("Data Period", options=["1mo", "3mo"], index=0)
 
-# Supertrend Engine (Built-in Pandas)
+# Indicator Parameters
 st_length = st.sidebar.number_input("Supertrend Length (ATR)", min_value=5, value=10)
 st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=3.0, step=0.1)
+rsi_period = st.sidebar.number_input("RSI Period", min_value=5, value=14)
+ema_period = st.sidebar.number_input("Long EMA Period", min_value=50, value=200)
 
 cash = st.sidebar.number_input("Starting Capital (INR)", value=100000)
 
-# --- PURE PANDAS SUPERTREND FUNCTION ---
-def calculate_supertrend(df, period=10, multiplier=3):
+# --- PURE PANDAS CALCULATIONS (No external library) ---
+def calculate_indicators(df, st_len=10, st_mult=3.0, rsi_len=14, ema_len=200):
     df = df.copy()
-    # True Range (TR) Calculation
+    
+    # 1. 200 EMA Calculation
+    df['EMA_Long'] = df['Close'].ewm(span=ema_len, adjust=False).mean()
+    
+    # 2. RSI Calculation
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_len).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_len).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # 3. Supertrend Calculation
     df['H-L'] = df['High'] - df['Low']
     df['H-PC'] = (df['High'] - df['Close'].shift(1)).abs()
     df['L-PC'] = (df['Low'] - df['Close'].shift(1)).abs()
     df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+    df['ATR'] = df['TR'].rolling(window=st_len).mean()
     
-    # Average True Range (ATR)
-    df['ATR'] = df['TR'].rolling(window=period).mean()
-    
-    # Basic Upper & Lower Bands
     hl2 = (df['High'] + df['Low']) / 2
-    df['Basic_UB'] = hl2 + (multiplier * df['ATR'])
-    df['Basic_LB'] = hl2 - (multiplier * df['ATR'])
-    
-    # Final Bands & Trend Direction
+    df['Basic_UB'] = hl2 + (st_mult * df['ATR'])
+    df['Basic_LB'] = hl2 - (st_mult * df['ATR'])
     df['Final_UB'] = df['Basic_UB']
     df['Final_LB'] = df['Basic_LB']
     df['Supertrend'] = 0.0
-    df['Direction'] = 1  # 1 for Buy, -1 for Sell
+    df['Direction'] = 1
     
     for i in range(1, len(df)):
-        # Upper Band Logic
         if df['Basic_UB'].iloc[i] < df['Final_UB'].iloc[i-1] or df['Close'].iloc[i-1] > df['Final_UB'].iloc[i-1]:
             df.loc[df.index[i], 'Final_UB'] = df['Basic_UB'].iloc[i]
         else:
             df.loc[df.index[i], 'Final_UB'] = df['Final_UB'].iloc[i-1]
             
-        # Lower Band Logic
         if df['Basic_LB'].iloc[i] > df['Final_LB'].iloc[i-1] or df['Close'].iloc[i-1] < df['Final_LB'].iloc[i-1]:
             df.loc[df.index[i], 'Final_LB'] = df['Basic_LB'].iloc[i]
         else:
             df.loc[df.index[i], 'Final_LB'] = df['Final_LB'].iloc[i-1]
             
-        # Direction Logic
         if df['Direction'].iloc[i-1] == 1:
             df.loc[df.index[i], 'Direction'] = 1 if df['Close'].iloc[i] > df['Final_LB'].iloc[i] else -1
         else:
@@ -70,38 +75,47 @@ try:
     data = yf.download(tickers=ticker, period=period, interval="15m")
     
     if data.empty:
-        st.error("डेटा नहीं मिला! कृपया सही टिकर डालें (उदा. RELIANCE.NS)")
+        st.error("डेटा नहीं मिला! सही टिकर डालें।")
     else:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
-        st.success("डेटा सफलतापूर्वक फेच हुआ! प्रोसेसिंग जारी है...")
+        st.success("डेटा लोड हो गया! एडवांस इंडिकेटर्स कैलकुलेट हो रहे हैं...")
         
-        # Calculate Supertrend
-        df_result = calculate_supertrend(data, st_length, st_multiplier)
+        # Calculate All Indicators
+        df_result = calculate_indicators(data, st_length, st_multiplier, rsi_period, ema_period)
         
-        # --- GENERATE TRADES & BACKTEST ---
-        df_result['Signal'] = df_result['Direction'].diff() # Detect crossovers
-        
+        # --- ADVANCED STRATEGY LOGIC ---
         trades = []
         in_position = False
         buy_price = 0
         
-        for index, row in df_result.iterrows():
-            if row['Signal'] == 2: # Trend turned Green (BUY)
-                if not in_position:
-                    buy_price = row['Close']
-                    in_position = True
-                    trades.append({'Type': 'BUY', 'Price': buy_price, 'Time': index})
-            elif row['Signal'] == -2: # Trend turned Red (SELL/EXIT)
+        for i in range(1, len(df_result)):
+            row = df_result.iloc[i]
+            prev_row = df_result.iloc[i-1]
+            index = df_result.index[i]
+            
+            # BUY CONDITION: 
+            # 1. Supertrend turned Green (Direction shifted from -1 to 1)
+            # 2. Close Price is ABOVE 200 EMA (Trend is Bullish)
+            # 3. RSI is ABOVE 50 (Strong momentum)
+            if prev_row['Direction'] == -1 and row['Direction'] == 1:
+                if row['Close'] > row['EMA_Long'] and row['RSI'] > 50:
+                    if not in_position:
+                        buy_price = row['Close']
+                        in_position = True
+                        trades.append({'Type': 'BUY', 'Price': buy_price, 'Time': index})
+                        
+            # EXIT CONDITION: Supertrend turns Red OR Price drops below 200 EMA
+            elif row['Direction'] == -1 or row['Close'] < row['EMA_Long']:
                 if in_position:
                     sell_price = row['Close']
                     pnl = ((sell_price - buy_price) / buy_price) * 100
                     in_position = False
                     trades.append({'Type': 'SELL', 'Price': sell_price, 'Time': index, 'PnL%': pnl})
 
-        # --- CALCULATE PERFOMANCE METRICS ---
-        st.subheader("📊 Performance Report")
+        # --- DISPLAY PERFORMANCE ---
+        st.subheader("📊 Multi-Indicator Strategy Report")
         col1, col2 = st.columns(2)
         
         if len(trades) > 1:
@@ -121,15 +135,17 @@ try:
                 st.metric(label="Total Closed Trades", value=total_trades)
                 st.metric(label="Win Rate (%)", value=f"{win_rate:.2f}%")
                 
-            # Show Detailed Trade Log
-            st.write("### 📝 Detailed Trade Log (क्लोज्ड ट्रेड्स लिस्ट)")
+            st.write("### 📝 Filtering Trade Log (केवल फ़िल्टर्ड ट्रेड्स)")
             st.dataframe(trades_df[['Time', 'Price', 'PnL%']])
         else:
-            st.warning("इस अवधि में कोई कम्प्लीट Buy-and-Sell ट्रेड नहीं मिला। कृपया डेटा पीरियड बढ़ाएं या सेटिंग्स बदलें।")
+            st.warning("इन कड़क कंडीशन्स (Supertrend + RSI + EMA) के साथ इस अवधि में कोई ट्रेड मैच नहीं हुआ। कृपया डेटा पीरियड बढ़ाएं या सेटिंग्स को थोड़ा कम करें।")
             
-        # Line Chart of Stock Close vs Supertrend
-        st.write("### 📉 Stock Price vs Supertrend Line")
-        st.line_chart(df_result[['Close', 'Supertrend']])
+        # Charts
+        st.write("### 📉 Price, Supertrend & 200 EMA Chart")
+        st.line_chart(df_result[['Close', 'Supertrend', 'EMA_Long']])
+        
+        st.write("### ⏱️ RSI (Relative Strength Index)")
+        st.line_chart(df_result['RSI'])
 
 except Exception as e:
     st.error(f"सिस्टम एरर: {e}")
