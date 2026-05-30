@@ -1,6 +1,6 @@
-Plaintext
 streamlit
 pandas
 yfinance
 backtesting
-bokeh==2.4.3
+Bokeh==3.5.0
+XYZservices
