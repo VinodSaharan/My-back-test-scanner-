@@ -5,18 +5,19 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="High-Return Only Sell", layout="wide")
-st.title("⚡ High-Return ONLY SHORT/SELL Strategy (3-Month Data)")
-st.write("कम रिटर्न की समस्या को दूर करने के लिए बनाई गई एक फास्ट और डायनेमिक शॉर्टिंग स्ट्रेटजी")
+st.set_page_config(page_title="Ultimate Algo Backtester", layout="wide")
+st.title("🏆 Ultimate All-Weather Intraday Strategy (3-Month Data)")
+st.write("मार्केट की दिशा के साथ चलने वाली सबसे सफल और प्रैक्टिकल ट्रेडिंग रणनीति")
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("🔧 Settings")
-ticker = st.sidebar.text_input("Stock Ticker", value="TATAMOTORS.NS")
+ticker = st.sidebar.text_input("Stock Ticker", value="SBIN.NS")
 
-# Fast Parameters for High Return
-st_length = st.sidebar.number_input("Supertrend Length (ATR)", min_value=3, value=7) # छोटा किया फॉर फास्ट सिग्नल्स
-st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=1.5, step=0.1) # 1.5 किया ताकि छोटा सा फॉल भी पकड़े
-ema_period = st.sidebar.number_input("Fast EMA Period", min_value=5, value=21) # 21 EMA किया
+# Professional Golden Combo Parameters
+fast_ema = st.sidebar.number_input("Fast EMA (एंट्री स्पीड)", min_value=5, value=9)
+slow_ema = st.sidebar.number_input("Slow EMA (ट्रेंड फिल्टर)", min_value=10, value=21)
+st_length = st.sidebar.number_input("Supertrend Length", min_value=5, value=10)
+st_multiplier = st.sidebar.number_input("Supertrend Multiplier", min_value=1.0, value=2.5, step=0.1)
 
 cash = st.sidebar.number_input("Starting Capital (INR)", value=100000)
 
@@ -33,14 +34,15 @@ def fetch_3_month_intraday(symbol):
     combined_df = combined_df.loc[~combined_df.index.duplicated(keep='first')].sort_index()
     return combined_df
 
-# --- PURE PANDAS FAST INDICATORS ---
-def calculate_indicators(df, st_len=7, st_mult=1.5, ema_len=21):
+# --- INDICATORS ENGINE ---
+def calculate_indicators(df, f_ema=9, s_ema=21, st_len=10, st_mult=2.5):
     df = df.copy()
     
-    # Fast EMA
-    df['EMA_Fast'] = df['Close'].ewm(span=ema_len, adjust=False).mean()
+    # EMAs for Trend Check
+    df['EMA_Fast'] = df['Close'].ewm(span=f_ema, adjust=False).mean()
+    df['EMA_Slow'] = df['Close'].ewm(span=s_ema, adjust=False).mean()
     
-    # Fast Supertrend Calculation
+    # Supertrend
     df['H-L'] = df['High'] - df['Low']
     df['H-PC'] = (df['High'] - df['Close'].shift(1)).abs()
     df['L-PC'] = (df['Low'] - df['Close'].shift(1)).abs()
@@ -75,23 +77,21 @@ def calculate_indicators(df, st_len=7, st_mult=1.5, ema_len=21):
         
     return df
 
-# --- RUN SYSTEM ---
+# --- EXPERT TRADING SYSTEM ---
 try:
     data = fetch_3_month_intraday(ticker)
     
     if data.empty:
-        st.error("डेटा नहीं मिला!")
+        st.error("डेटा लिंक में समस्या है!")
     else:
         if isinstance(data.columns, pd.MultiIndex):
             data.columns = data.columns.get_level_values(0)
             
-        st.success("पिछले 3 महीने का डेटा सफलतापूर्वक लोड और कंबाइन हो गया!")
+        st.success("पिछले 3 महीने का डेटा सफलतापूर्वक प्रोसेस हो गया है!")
+        df_result = calculate_indicators(data, fast_ema, slow_ema, st_length, st_multiplier)
         
-        df_result = calculate_indicators(data, st_length, st_multiplier, ema_period)
-        
-        # --- HIGH SPEED SHORT LOGIC ---
         trades = []
-        in_short = False
+        position = None # "LONG", "SHORT", or None
         entry_price = 0
         entry_time = None
         
@@ -100,27 +100,37 @@ try:
             prev_row = df_result.iloc[i-1]
             index = df_result.index[i]
             
-            if in_short:
-                # EXIT SHORT: जैसे ही सुपरट्रेंड ग्रीन हो या प्राइस 21 EMA के ऊपर निकले (फास्ट एक्जिट)
-                if row['Direction'] == 1 or row['Close'] > row['EMA_Fast']:
+            # 1. POSITION EXIT LOGIC
+            if position == "LONG":
+                if row['Direction'] == -1 or row['EMA_Fast'] < row['EMA_Slow']:
+                    pnl = ((row['Close'] - entry_price) / entry_price) * 100
+                    trades.append({'Type': 'BUY (Long)', 'Entry': entry_time, 'Exit': index, 'PnL%': pnl})
+                    position = None
+            elif position == "SHORT":
+                if row['Direction'] == 1 or row['EMA_Fast'] > row['EMA_Slow']:
                     pnl = ((entry_price - row['Close']) / entry_price) * 100
-                    trades.append({'Trade Type': 'SHORT (Sell)', 'Entry Time': entry_time, 'Exit Time': index, 'Entry Price': entry_price, 'Exit Price': row['Close'], 'PnL%': pnl})
-                    in_short = False
-            else:
-                # ENTRY SHORT: जैसे ही सुपरट्रेंड रेड हो और प्राइस 21 EMA के नीचे हो (नो RSI डिले)
-                if prev_row['Direction'] == 1 and row['Direction'] == -1:
-                    if row['Close'] < row['EMA_Fast']:
-                        in_short = True
-                        entry_price = row['Close']
-                        entry_time = index
+                    trades.append({'Type': 'SHORT (Sell)', 'Entry': entry_time, 'Exit': index, 'PnL%': pnl})
+                    position = None
+                    
+            # 2. POSITION ENTRY LOGIC
+            if position is None:
+                # BUY: Supertrend turned green AND 9 EMA is above 21 EMA (Bullish Market)
+                if prev_row['Direction'] == -1 and row['Direction'] == 1 and row['EMA_Fast'] > row['EMA_Slow']:
+                    position = "LONG"
+                    entry_price = row['Close']
+                    entry_time = index
+                # SHORT: Supertrend turned red AND 9 EMA is below 21 EMA (Bearish Market)
+                elif prev_row['Direction'] == 1 and row['Direction'] == -1 and row['EMA_Fast'] < row['EMA_Slow']:
+                    position = "SHORT"
+                    entry_price = row['Close']
+                    entry_time = index
 
-        # --- DISPLAY RESULTS ---
-        st.subheader("📊 Performance Report")
+        # --- DISPLAY REPORT ---
+        st.subheader("📊 Master Strategy Performance Report")
         col1, col2 = st.columns(2)
         
         if len(trades) > 0:
             trades_df = pd.DataFrame(trades)
-            
             total_trades = len(trades_df)
             win_trades = len(trades_df[trades_df['PnL%'] > 0])
             win_rate = (win_trades / total_trades) * 100
@@ -128,21 +138,20 @@ try:
             final_equity = cash * (1 + (total_return/100))
             
             with col1:
-                st.metric(label="Total Return (%) 🔥", value=f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
-                st.metric(label="Final Estimated Capital", value=f"₹{final_equity:,.2f}")
-                
+                st.metric(label="Total Return (%) 💰", value=f"{total_return:.2f}%", delta=f"{total_return:.2f}%")
+                st.metric(label="Final Value (₹)", value=f"₹{final_equity:,.2f}")
             with col2:
-                st.metric(label="Total Closed Trades", value=total_trades)
+                st.metric(label="Total Trades", value=total_trades)
                 st.metric(label="Win Rate (%)", value=f"{win_rate:.2f}%")
                 
-            st.write("### 📝 Fast Sell Trades Log")
-            st.dataframe(trades_df[['Entry Time', 'Exit Time', 'Entry Price', 'Exit Price', 'PnL%']])
+            st.write("### 📝 Detailed Trade Book")
+            st.dataframe(trades_df)
         else:
-            st.warning("कोई ट्रेड नहीं मिला। कृपया साइडबार से पैरामीटर्स बदलें।")
+            st.warning("इस स्टॉक में अभी कोई मजबूत ट्रेंड नहीं है। कृपया दूसरा टिकर ट्राई करें।")
             
-        # Charts
-        st.write("### 📉 3-Month Price vs Fast Supertrend & 21 EMA")
-        st.line_chart(df_result[['Close', 'Supertrend', 'EMA_Fast']])
+        # Chart
+        st.write("### 📉 Multi-Trend Analysis Chart")
+        st.line_chart(df_result[['Close', 'EMA_Fast', 'EMA_Slow']])
 
 except Exception as e:
-    st.error(f"सिस्टम एरर: {e}")
+    st.error(f"एरर: {e}")
