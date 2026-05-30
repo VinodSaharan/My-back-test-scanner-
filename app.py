@@ -79,11 +79,10 @@ try:
             
             # महत्वपूर्ण मैट्रिक्स दिखाना
             st.dataframe(metrics_df.loc[[
-                'Start', 'End', 'Duration', 'Exposure Time [%]', 
-                'Equity Final [$]', 'Return [%]', 'Buy & Hold Return [%]', 
-                'Max. Drawdown [%]', 'Win Rate [%]', 'Total Trades'
-            ]])
-            
+    'Start', 'End', 'Duration', 'Exposure Time [%]', 
+    'Equity Final [$]', 'Return [%]', 'Buy & Hold Return [%]', 
+    'Max. Drawdown [%]', 'Win Rate [%]', '# Trades'       # <-- इसे अपडेट किया है
+           ]])
         with col2:
             st.write("### 📉 15-Min Interactive Chart")
             # HTML चार्ट जेनरेट करके Streamlit में दिखाना
