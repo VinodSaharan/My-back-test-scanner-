@@ -72,7 +72,7 @@ def calculate_indicators(df, st_len=10, st_mult=2.0, rsi_len=14, ema_len=50):
 
 # --- FETCH & PROCESS ---
 try:
-    data = yf.download(tickers=ticker, period=period, interval="15m")
+    data = yf.download(tickers=ticker, period="60d", interval="15m")
     
     if data.empty:
         st.error("डेटा नहीं मिला!")
