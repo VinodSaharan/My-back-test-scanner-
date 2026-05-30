@@ -1,5 +1,6 @@
 Plaintext
 streamlit
-yfinance
 pandas
-pandas-ta
+yfinance
+backtesting
+bokeh==2.4.3
