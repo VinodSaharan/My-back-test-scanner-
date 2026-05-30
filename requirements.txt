@@ -4,3 +4,4 @@ yfinance
 backtesting
 Bokeh==3.5.0
 XYZservices
+pandas_ta
