@@ -2,59 +2,48 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.set_page_config(page_title="Direct Backtester", layout="wide")
+st.set_page_config(page_title="Advanced Backtester with EMA", layout="wide")
 
-st.title("🚀 बिना CSV के लाइव बैकटेस्टिंग टूल")
+st.title("🚀 इंट्राडे बैकटेस्टिंग (ORB + 20 EMA फिल्टर)")
 
-# 1. इनपुट फील्ड्स
-ticker = st.sidebar.text_input("स्टॉक सिंबल (जैसे RELIANCE.NS)", "RELIANCE.NS")
+# इनपुट फील्ड्स
+ticker = st.sidebar.text_input("स्टॉक सिंबल", "RELIANCE.NS")
 stop_loss_pts = st.sidebar.number_input("स्टॉप-लॉस पॉइंट्स", value=10)
 rr_ratio = st.sidebar.slider("रिस्क-रिवॉर्ड रेश्यो", 1.0, 3.0, 1.5)
 
-if st.button("डेटा डाउनलोड और बैकटेस्ट करें"):
-    # 2. Yahoo Finance से डेटा डाउनलोड करें
+if st.button("बैकटेस्ट शुरू करें"):
+    # डेटा डाउनलोड
     df = yf.download(ticker, period="5d", interval="5m")
     
-    # टाइमजोन और फॉर्मेटिंग
-    df.index = pd.to_datetime(df.index)
+    # 20 EMA की गणना
+    df['EMA_20'] = df['Close'].ewm(span=20, adjust=False).mean()
     df['Time'] = df.index.time
     
-    # 10:30 AM तक का डेटा (रेंज निकालने के लिए)
+    # सुबह की रेंज
     morning_data = df[df['Time'] <= pd.to_datetime("10:30").time()]
     m_high = morning_data['High'].max()
     m_low = morning_data['Low'].min()
     
-    st.write(f"### {ticker} के लिए 10:30 AM की रेंज: High={m_high:.2f}, Low={m_low:.2f}")
-
-    # 3. बैकटेस्टिंग लॉजिक
     results = []
     post_data = df[df['Time'] > pd.to_datetime("10:30").time()]
     
     for index, row in post_data.iterrows():
-        # BUY Logic
-        if row['Close'] > m_high:
-            entry = row['Close']
-            target = entry + (stop_loss_pts * rr_ratio)
-            sl = entry - stop_loss_pts
-            # यहाँ हम यह चेक कर रहे हैं कि क्या उस कैंडल में टारगेट/SL हिट हुआ
-            result = "PROFIT" if row['High'] >= target else ("LOSS" if row['Low'] <= sl else "NEUTRAL")
+        # BUY Logic: प्राइस रेंज के ऊपर हो AND प्राइस 20 EMA के ऊपर हो
+        if row['Close'] > m_high and row['Close'] > row['EMA_20']:
+            result = "PROFIT" if row['High'] >= (row['Close'] + (stop_loss_pts * rr_ratio)) else "LOSS"
             results.append({'Time': row['Time'], 'Type': 'BUY', 'Status': result})
             break 
             
-        # SELL Logic
-        elif row['Close'] < m_low:
-            entry = row['Close']
-            target = entry - (stop_loss_pts * rr_ratio)
-            sl = entry + stop_loss_pts
-            result = "PROFIT" if row['Low'] <= target else ("LOSS" if row['High'] >= sl else "NEUTRAL")
+        # SELL Logic: प्राइस रेंज के नीचे हो AND प्राइस 20 EMA के नीचे हो
+        elif row['Close'] < m_low and row['Close'] < row['EMA_20']:
+            result = "PROFIT" if row['Low'] <= (row['Close'] - (stop_loss_pts * rr_ratio)) else "LOSS"
             results.append({'Time': row['Time'], 'Type': 'SELL', 'Status': result})
             break
 
-    # 4. रिपोर्ट
+    # रिपोर्टिंग
     if results:
-        res_df = pd.DataFrame(results)
-        st.write("### ट्रेड रिजल्ट्स", res_df)
+        st.write("### ट्रेड रिजल्ट्स", pd.DataFrame(results))
     else:
-        st.warning("10:30 के बाद कोई एंट्री नहीं मिली।")
+        st.warning("कोई भी ट्रेड 20 EMA फिल्टर के साथ नहीं मिला।")
 
-    st.line_chart(df['Close'])
+    st.line_chart(df[['Close', 'EMA_20']])
